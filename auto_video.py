@@ -3,6 +3,7 @@ Animated Hindi video generator (vertical 1080x1920, for Shorts/Reels).
 Reads script.txt (one scene per line, Hindi/Devanagari) and writes output.mp4
 - Natural Hindi voice (edge-tts), one voice clip per scene so text matches speech
 - Animated gradient background, floating bubbles, text slide-in + fade
+- Cartoon character that waves, blinks and moves its mouth with the voice
 - If the voice service fails, makes a silent video instead of crashing
 """
 import asyncio
@@ -103,12 +104,86 @@ def text_layer(text):
     return layer
 
 
-def make_scene(text, idx):
+S = 2                    # supersampling for smooth edges
+CW, CH = 560, 760        # character canvas (local units)
+CHAR_POS = (W // 2 - CW // 2, 1080)
+
+
+def _s(v):
+    return int(round(v * S))
+
+
+def _blob(d, box, fill, outline=None, width=0):
+    d.ellipse([_s(v) for v in box], fill=fill, outline=outline, width=_s(width) if width else 0)
+
+
+def _limb(d, p1, p2, w, fill):
+    d.line([_s(p1[0]), _s(p1[1]), _s(p2[0]), _s(p2[1])], fill=fill, width=_s(w))
+    for x, y in (p1, p2):
+        _blob(d, (x - w / 2, y - w / 2, x + w / 2, y + w / 2), fill)
+
+
+def draw_character(t, mouth):
+    """Cute cartoon mascot: bobs, waves, blinks, and moves its mouth with the voice."""
+    img = Image.new("RGBA", (CW * S, CH * S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    bob = 8 * math.sin(t * 3.0) - 10 * mouth
+    skin, hair, shirt, pants = (255, 214, 170), (45, 32, 30), (255, 159, 67), (60, 70, 140)
+
+    _blob(d, (110, 715, 450, 755), (0, 0, 0, 55))                       # ground shadow
+    # legs and shoes
+    _limb(d, (225, 620 + bob / 2), (225, 705), 56, pants)
+    _limb(d, (335, 620 + bob / 2), (335, 705), 56, pants)
+    _blob(d, (180, 690, 265, 725), (30, 30, 40))
+    _blob(d, (295, 690, 380, 725), (30, 30, 40))
+    # body
+    d.rounded_rectangle([_s(150), _s(330 + bob), _s(410), _s(650 + bob / 2)],
+                        radius=_s(80), fill=shirt)
+    # left arm (down), right arm (waving)
+    _limb(d, (160, 380 + bob), (105, 500 + bob), 46, shirt)
+    _blob(d, (82, 485 + bob, 130, 533 + bob), skin)
+    wave = math.sin(t * 5.0)
+    hand = (455 + 18 * wave, 300 + bob - 30 * abs(wave))
+    _limb(d, (400, 380 + bob), hand, 46, shirt)
+    _blob(d, (hand[0] - 26, hand[1] - 26, hand[0] + 26, hand[1] + 26), skin)
+    # head
+    hy = 208 + bob
+    _blob(d, (130, hy - 150, 430, hy + 150), skin)
+    d.pieslice([_s(122), _s(hy - 162), _s(438), _s(hy + 120)], _s(0) + 190, 350, fill=hair)
+    _blob(d, (250, hy - 185, 310, hy - 135), hair)                      # hair tuft
+    # cheeks
+    _blob(d, (150, hy + 30, 210, hy + 75), (255, 140, 140, 150))
+    _blob(d, (350, hy + 30, 410, hy + 75), (255, 140, 140, 150))
+    # eyes (blink every ~3.2 s)
+    blink = (t % 3.2) < 0.14
+    for ex in (215, 345):
+        if blink:
+            d.line([_s(ex - 24), _s(hy - 5), _s(ex + 24), _s(hy - 5)], fill=(40, 30, 30), width=_s(7))
+        else:
+            _blob(d, (ex - 30, hy - 38, ex + 30, hy + 22), (255, 255, 255), (40, 30, 30), 3)
+            _blob(d, (ex - 14 + 4 * math.sin(t), hy - 22, ex + 14 + 4 * math.sin(t), hy + 8), (35, 25, 25))
+            _blob(d, (ex - 6 + 4 * math.sin(t), hy - 18, ex + 2 + 4 * math.sin(t), hy - 10), (255, 255, 255))
+    # eyebrows
+    d.line([_s(185), _s(hy - 58 - 6 * mouth), _s(245), _s(hy - 62 - 6 * mouth)], fill=hair, width=_s(8))
+    d.line([_s(315), _s(hy - 62 - 6 * mouth), _s(375), _s(hy - 58 - 6 * mouth)], fill=hair, width=_s(8))
+    # mouth follows the voice
+    my = hy + 85
+    if mouth < 0.08:
+        d.arc([_s(240), _s(my - 30), _s(320), _s(my + 20)], 20, 160, fill=(150, 40, 50), width=_s(7))
+    else:
+        mh = 14 + 58 * mouth
+        _blob(d, (250, my - mh / 2 + 8, 310, my + mh / 2 + 8), (150, 40, 50))
+        if mh > 40:
+            _blob(d, (262, my + mh / 2 - 14, 298, my + mh / 2 + 6), (240, 110, 120))
+    return img.resize((CW, CH), Image.LANCZOS)
+
+
+def make_scene(text, idx, env=None):
     c1, c2 = PALETTES[idx % len(PALETTES)]
     bg = Image.fromarray(gradient(c1, c2)).convert("RGBA")
     layer = text_layer(text)
     lw, lh = layer.size
-    tx, ty = (W - lw) // 2, (H - lh) // 2
+    tx, ty = (W - lw) // 2, max(140, 760 - lh)
     alpha = layer.getchannel("A")
 
     def frame(t):
@@ -130,9 +205,37 @@ def make_scene(text, idx):
         lay = layer.copy()
         lay.putalpha(alpha.point(lambda v: int(v * e)))
         img.alpha_composite(lay, (tx, ty + int((1 - e) * 80)))
+        if env is not None and int(t * FPS) < len(env):
+            mouth = float(env[int(t * FPS)])
+        elif env is None:
+            mouth = 0.25 + 0.25 * math.sin(t * 9)
+        else:
+            mouth = 0.0
+        img.alpha_composite(draw_character(t, mouth), CHAR_POS)
         return np.array(img.convert("RGB"))
 
     return frame
+
+
+def mouth_envelope(audio):
+    """Mouth opening (0..1) for every video frame, from the loudness of the voice."""
+    try:
+        arr = audio.to_soundarray(fps=22050)
+        mono = np.abs(arr).mean(axis=1) if arr.ndim > 1 else np.abs(arr)
+        n = int(audio.duration * FPS) + 1
+        win = int(22050 * 0.05)
+        vals = []
+        for i in range(n):
+            c = int(i / FPS * 22050)
+            seg = mono[max(0, c - win): c + win]
+            vals.append(float(np.sqrt((seg ** 2).mean())) if len(seg) else 0.0)
+        vals = np.array(vals)
+        ref = np.percentile(vals, 95) or 1.0
+        env = np.clip(vals / ref, 0, 1)
+        return np.convolve(env, np.ones(3) / 3, mode="same")
+    except Exception as e:
+        print("Mouth sync failed:", e)
+        return None
 
 
 async def _tts(text, path):
@@ -156,7 +259,7 @@ def build(lines, out="output.mp4"):
     for i, line in enumerate(lines):
         audio = voice_for(line, i)
         dur = audio.duration + 0.6 if audio else SILENT_SECONDS
-        clip = VideoClip(make_scene(line, i), duration=dur)
+        clip = VideoClip(make_scene(line, i, mouth_envelope(audio) if audio else None), duration=dur)
         if audio:
             clip = clip.set_audio(audio)
         clips.append(clip)
