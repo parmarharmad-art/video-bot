@@ -4,11 +4,15 @@ Reads script.txt (one scene per line, Hindi/Devanagari) and writes output.mp4
 - Natural Hindi voice (edge-tts), one voice clip per scene so text matches speech
 - Animated gradient background, floating bubbles, text slide-in + fade
 - Cartoon character that waves, blinks and moves its mouth with the voice
+- Series mode: episodes.txt holds many episodes ("## 1", "## 2" ...); each one is rendered
+  to videos/epNN.mp4 once (already-made episodes are skipped) and pushed to GitHub
 - If the voice service fails, makes a silent video instead of crashing
 """
 import asyncio
 import glob
 import math
+import os
+import shutil
 import subprocess
 
 import numpy as np
@@ -270,7 +274,45 @@ def build(lines, out="output.mp4"):
     )
 
 
+def parse_episodes(path="episodes.txt"):
+    eps, cur = {}, None
+    with open(path, encoding="utf-8") as f:
+        for raw in f:
+            s = raw.strip()
+            if not s:
+                continue
+            if s.startswith("## "):
+                cur = int(s[3:].strip())
+                eps[cur] = []
+            elif cur is not None:
+                eps[cur].append(s)
+    return eps
+
+
+def git_save(path, msg):
+    """Commit and push a finished episode right away so nothing is lost if a later one fails."""
+    ident = ["-c", "user.name=video-bot", "-c", "user.email=bot@users.noreply.github.com"]
+    subprocess.run(["git", "add", path], check=False)
+    subprocess.run(["git"] + ident + ["commit", "-m", msg], check=False)
+    subprocess.run(["git", "push"], check=False)
+
+
 if __name__ == "__main__":
-    with open("script.txt", encoding="utf-8") as f:
-        scene_lines = [l.strip() for l in f if l.strip()]
-    build(scene_lines)
+    if os.path.exists("episodes.txt"):
+        os.makedirs("videos", exist_ok=True)
+        episodes = parse_episodes()
+        last = None
+        for n in sorted(episodes):
+            out = f"videos/ep{n:02d}.mp4"
+            if os.path.exists(out):
+                print("Skip (already made):", out)
+            else:
+                print("Making", out)
+                build(episodes[n], out)
+                git_save(out, f"Episode {n}")
+            last = out
+        shutil.copy(last, "output.mp4")
+    else:
+        with open("script.txt", encoding="utf-8") as f:
+            scene_lines = [l.strip() for l in f if l.strip()]
+        build(scene_lines)
