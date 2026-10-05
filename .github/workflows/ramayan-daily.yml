@@ -1,0 +1,27 @@
+name: ramayan-daily
+on:
+  schedule:
+    - cron: "30 18 * * *"
+  workflow_dispatch:
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ramayan
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-noto-core
+      - run: pip install -r requirements.txt
+      - run: python generate.py
+        env: { PEXELS_KEY: "${{ secrets.PEXELS_KEY }}" }
+      - uses: actions/upload-artifact@v4
+        with: { name: video, path: ramayan/out/video.mp4 }
+      - run: python upload_youtube.py
+        continue-on-error: true
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH: ${{ secrets.YT_REFRESH }}
