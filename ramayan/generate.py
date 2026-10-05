@@ -1,5 +1,5 @@
 """Daily Ramayan short: Hindi TTS (edge-tts, free) + footage (Pexels if key set, else animated gradient) + ffmpeg + Devanagari captions."""
-import asyncio, json, os, random, subprocess, datetime, requests, edge_tts
+import asyncio, json, os, random, shutil, subprocess, datetime, requests, edge_tts
 
 W, H = 1080, 1920
 day = (datetime.date.today() - datetime.date(2026, 10, 6)).days
@@ -65,3 +65,18 @@ if credit:
 json.dump({"title": f"{st['title']} | Ramayan Katha #Shorts", "description": desc},
           open("out/meta.json", "w"), ensure_ascii=False)
 print("done", D, "pexels" if have_bg else "fallback")
+
+# publish latest.mp4 to the repo so Zapier can fetch it via a fixed public URL
+try:
+    shutil.copy("out/video.mp4", "latest.mp4")
+    shutil.copy("out/meta.json", "latest.json")
+    run = lambda *a: subprocess.run(a, check=False)
+    run("git", "config", "user.name", "bot")
+    run("git", "config", "user.email", "bot@users.noreply.github.com")
+    run("git", "add", "latest.mp4", "latest.json")
+    run("git", "commit", "-m", "daily video")
+    run("git", "pull", "--rebase")
+    p = subprocess.run(["git", "push"], check=False)
+    print("push exit code:", p.returncode)
+except Exception as e:
+    print("publish step failed:", e)
